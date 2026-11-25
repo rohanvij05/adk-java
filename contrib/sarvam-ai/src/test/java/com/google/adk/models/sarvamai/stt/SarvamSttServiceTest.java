@@ -140,6 +140,41 @@ class SarvamSttServiceTest {
   }
 
   @Test
+  void transcribePcm16_handlesNullRequestConfigAndShortLanguageCode() throws Exception {
+    server.enqueue(
+        new MockResponse().setBody("{\"transcript\":\"namaste\",\"language_code\":\"hi-IN\"}"));
+    var config =
+        SarvamAiConfig.builder()
+            .apiKey("key")
+            .sttEndpoint(server.url("/speech-to-text").toString())
+            .build();
+    var service = new SarvamSttService(config, new OkHttpClient());
+    assertThat(service.transcribePcm16(new byte[] {1, 2}, 16000, 1, null).getText())
+        .isEqualTo("namaste");
+    String firstBody =
+        new String(
+            server.takeRequest(1, TimeUnit.SECONDS).getBody().readByteArray(),
+            java.nio.charset.StandardCharsets.ISO_8859_1);
+    assertThat(firstBody).doesNotContain("name=\"language_code\"");
+
+    server.enqueue(
+        new MockResponse().setBody("{\"transcript\":\"namaste\",\"language_code\":\"hi-IN\"}"));
+    service.transcribePcm16(
+        new byte[] {1, 2},
+        16000,
+        1,
+        TranscriptionConfig.builder()
+            .endpoint(server.url("/speech-to-text").toString())
+            .language("hi")
+            .build());
+    String secondBody =
+        new String(
+            server.takeRequest(1, TimeUnit.SECONDS).getBody().readByteArray(),
+            java.nio.charset.StandardCharsets.ISO_8859_1);
+    assertThat(secondBody).contains("hi-IN");
+  }
+
+  @Test
   void transcribePcm16_rejectsIncompleteSampleFrame() {
     assertThrows(
         IllegalArgumentException.class,

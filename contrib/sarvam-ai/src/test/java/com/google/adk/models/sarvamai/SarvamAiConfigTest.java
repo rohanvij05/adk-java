@@ -125,6 +125,19 @@ class SarvamAiConfigTest {
   }
 
   @Test
+  void normalizeLanguageCode_handlesLocalesAndAutoDetect() {
+    assertThat(SarvamAiConfig.normalizeLanguageCode(null)).isNull();
+    assertThat(SarvamAiConfig.normalizeLanguageCode("   ")).isNull();
+    assertThat(SarvamAiConfig.normalizeLanguageCode("auto")).isNull();
+    assertThat(SarvamAiConfig.normalizeLanguageCode("AUTO")).isNull();
+    assertThat(SarvamAiConfig.normalizeLanguageCode("-IN")).isNull();
+    assertThat(SarvamAiConfig.normalizeLanguageCode("hi")).isEqualTo("hi-IN");
+    assertThat(SarvamAiConfig.normalizeLanguageCode("en_in")).isEqualTo("en-IN");
+    assertThat(SarvamAiConfig.normalizeLanguageCode("or")).isEqualTo("od-IN");
+    assertThat(SarvamAiConfig.normalizeLanguageCode("mai-IN")).isEqualTo("mai-IN");
+  }
+
+  @Test
   void builder_maxRetriesDefault() {
     SarvamAiConfig config = SarvamAiConfig.builder().apiKey("key").build();
     assertThat(config.maxRetries()).isEqualTo(SarvamAiConfig.DEFAULT_MAX_RETRIES);

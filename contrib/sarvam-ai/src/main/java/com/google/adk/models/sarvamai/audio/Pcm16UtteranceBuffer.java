@@ -21,7 +21,10 @@ import java.util.Objects;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Bounded PCM16 capture with energy-based speech detection and a silence watchdog.
@@ -32,6 +35,8 @@ import java.util.function.LongSupplier;
  * state can supply their existing monitor. Close each instance when capture ends.
  */
 public final class Pcm16UtteranceBuffer implements AutoCloseable {
+  private static final Logger logger = LoggerFactory.getLogger(Pcm16UtteranceBuffer.class);
+  private static final AtomicInteger WATCHDOG_THREAD_ID = new AtomicInteger();
   private static final ScheduledThreadPoolExecutor WATCHDOGS = createWatchdogs();
   private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
   private final double threshold;
@@ -44,16 +49,19 @@ public final class Pcm16UtteranceBuffer implements AutoCloseable {
   private final Object monitor;
   private final ScheduledFuture<?> watchdog;
   private boolean active;
+  private boolean saturated;
   private boolean closed;
   private long lastSpeechMs;
   private int speechBytes;
 
   private static ScheduledThreadPoolExecutor createWatchdogs() {
+    int poolSize = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors()));
     var executor =
         new ScheduledThreadPoolExecutor(
-            2,
+            poolSize,
             runnable -> {
-              Thread thread = new Thread(runnable, "adk-pcm-vad");
+              Thread thread =
+                  new Thread(runnable, "adk-pcm-vad-" + WATCHDOG_THREAD_ID.incrementAndGet());
               thread.setDaemon(true);
               return thread;
             });
@@ -124,7 +132,15 @@ public final class Pcm16UtteranceBuffer implements AutoCloseable {
     this.onEnd = Objects.requireNonNull(onEnd);
     this.clock = Objects.requireNonNull(clock);
     this.monitor = Objects.requireNonNull(monitor);
-    watchdog = WATCHDOGS.scheduleAtFixedRate(this::checkSilence, 200, 200, TimeUnit.MILLISECONDS);
+    watchdog = WATCHDOGS.scheduleAtFixedRate(this::runWatchdog, 200, 200, TimeUnit.MILLISECONDS);
+  }
+
+  private void runWatchdog() {
+    try {
+      checkSilence();
+    } catch (RuntimeException error) {
+      logger.warn("Unhandled exception in PCM silence watchdog callback", error);
+    }
   }
 
   public boolean isSpeechChunk(byte[] pcm) {
@@ -133,14 +149,35 @@ public final class Pcm16UtteranceBuffer implements AutoCloseable {
 
   public void append(byte[] pcm) {
     if (pcm == null || pcm.length == 0) return;
-    boolean ended;
+    boolean ended = false;
     synchronized (monitor) {
-      if (closed) return;
+      if (closed || saturated) return;
       boolean speech = isSpeechChunk(pcm);
-      if (!active && !speech && buffer.size() > idleBytes) buffer.reset();
-      if (pcm.length > maximumBytes - buffer.size()) {
-        // Preserve the bounded utterance until the caller can consume it.
-        ended = true;
+      if (!active && speechBytes == 0) {
+        if (!speech) {
+          appendIdlePreRoll(pcm);
+          return;
+        }
+        trimBufferTail(Math.min(idleBytes, Math.max(0, maximumBytes - pcm.length)));
+      }
+      int remaining = maximumBytes - buffer.size();
+      if (pcm.length > remaining) {
+        int writable = remaining & ~1;
+        if (writable > 0) {
+          buffer.write(pcm, 0, writable);
+          if (speech) {
+            lastSpeechMs = clock.getAsLong();
+            speechBytes += writable;
+          }
+        }
+        active = false;
+        if (speechBytes >= minimumSpeechBytes) {
+          // Preserve the bounded utterance once until the caller drains or resets it.
+          saturated = true;
+          ended = true;
+        } else {
+          reset();
+        }
       } else {
         buffer.write(pcm, 0, pcm.length);
         if (speech) {
@@ -153,6 +190,35 @@ public final class Pcm16UtteranceBuffer implements AutoCloseable {
       }
       if (ended) onEnd.run();
     }
+  }
+
+  private void appendIdlePreRoll(byte[] pcm) {
+    int cap = Math.min(idleBytes, maximumBytes) & ~1;
+    if (cap <= 0) {
+      buffer.reset();
+      return;
+    }
+    if (pcm.length >= cap) {
+      buffer.reset();
+      buffer.write(pcm, pcm.length - cap, cap);
+      return;
+    }
+    if (buffer.size() + pcm.length > cap) {
+      trimBufferTail(cap - pcm.length);
+    }
+    buffer.write(pcm, 0, pcm.length);
+  }
+
+  private void trimBufferTail(int maxRetainedBytes) {
+    int cap = maxRetainedBytes & ~1;
+    if (cap <= 0) {
+      buffer.reset();
+      return;
+    }
+    if (buffer.size() <= cap) return;
+    byte[] existing = buffer.toByteArray();
+    buffer.reset();
+    buffer.write(existing, existing.length - cap, cap);
   }
 
   private boolean silenceElapsed() {
@@ -195,6 +261,7 @@ public final class Pcm16UtteranceBuffer implements AutoCloseable {
     synchronized (monitor) {
       buffer.reset();
       active = false;
+      saturated = false;
       lastSpeechMs = 0;
       speechBytes = 0;
     }

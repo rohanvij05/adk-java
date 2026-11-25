@@ -87,14 +87,38 @@ class Pcm16UtteranceBufferTest {
       capture.append(speech());
       assertEquals(1, ended.get());
       assertEquals(8, capture.size());
-      capture.close();
+      assertFalse(capture.isSpeechActive());
+      // Saturated utterance must not fire duplicate callbacks before drain/reset.
       capture.append(speech());
       now.set(201);
+      capture.checkSilence();
+      assertEquals(1, ended.get());
+      capture.close();
+      capture.append(speech());
+      now.set(301);
       capture.checkSilence();
       assertEquals(1, ended.get());
       assertEquals(0, capture.size());
     } finally {
       capture.close();
+    }
+  }
+
+  @Test
+  void idlePreRollPreservesMostRecentSilenceBeforeSpeech() {
+    var now = new AtomicLong(1);
+    var ended = new AtomicInteger();
+    try (var capture =
+        new Pcm16UtteranceBuffer(400, 100, 4, 32, 4, ended::incrementAndGet, now::get)) {
+      capture.append(new byte[] {1, 0, 2, 0});
+      capture.append(new byte[] {3, 0, 4, 0});
+      capture.append(new byte[] {5, 0});
+      assertEquals(4, capture.size());
+      capture.append(speech());
+      now.set(201);
+      capture.checkSilence();
+      assertEquals(1, ended.get());
+      assertArrayEquals(new byte[] {4, 0, 5, 0, 0, 4, 0, 4}, capture.drain());
     }
   }
 }

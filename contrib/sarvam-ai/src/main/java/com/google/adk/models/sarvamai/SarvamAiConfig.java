@@ -122,14 +122,26 @@ public final class SarvamAiConfig {
 
   /** Normalizes an Indian language code to Sarvam's BCP-47 spelling; null means auto-detect. */
   public static String normalizeLanguageCode(String code) {
-    if (code == null || code.isBlank() || "auto".equalsIgnoreCase(code)) {
+    if (code == null || code.isBlank()) {
       return null;
     }
     String clean = code.trim();
+    if ("auto".equalsIgnoreCase(clean)) {
+      return null;
+    }
+    int separatorIndex = -1;
+    for (int i = 0; i < clean.length(); i++) {
+      char ch = clean.charAt(i);
+      if (ch == '-' || ch == '_') {
+        separatorIndex = i;
+        break;
+      }
+    }
     String prefix =
-        clean.contains("-")
-            ? clean.substring(0, clean.indexOf('-')).toLowerCase(Locale.ROOT)
-            : clean.toLowerCase(Locale.ROOT);
+        (separatorIndex >= 0 ? clean.substring(0, separatorIndex) : clean).toLowerCase(Locale.ROOT);
+    if (prefix.isEmpty()) {
+      return null;
+    }
     return switch (prefix) {
       case "hi" -> "hi-IN";
       case "en" -> "en-IN";

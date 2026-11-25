@@ -80,7 +80,11 @@ public final class SarvamSttService implements TranscriptionService {
     try {
       String sttModel = config.sttModel().orElse("saaras:v3");
       String mode = config.sttMode().orElse("transcribe");
-      String languageCode = config.sttLanguageCode().orElse(requestConfig.getLanguage());
+      String rawLanguage =
+          config
+              .sttLanguageCode()
+              .orElseGet(() -> requestConfig != null ? requestConfig.getLanguage() : null);
+      String languageCode = SarvamAiConfig.normalizeLanguageCode(rawLanguage);
 
       RequestBody fileBody = RequestBody.create(audioData, MediaType.parse("audio/wav"));
 
@@ -91,7 +95,7 @@ public final class SarvamSttService implements TranscriptionService {
               .addFormDataPart("model", sttModel)
               .addFormDataPart("mode", mode);
 
-      if (languageCode != null && !"auto".equals(languageCode)) {
+      if (languageCode != null) {
         bodyBuilder.addFormDataPart("language_code", languageCode);
       }
 

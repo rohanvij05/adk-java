@@ -41,11 +41,6 @@
             <version>${adk.core.version}</version>
         </dependency>
         <dependency>
-            <groupId>com.google.adk</groupId>
-            <artifactId>google-adk-dev</artifactId>
-            <version>${adk.core.version}</version>
-        </dependency>
-        <dependency>
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
             <version>${okhttp.version}</version>

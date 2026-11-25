@@ -155,12 +155,25 @@ class SarvamTtsServiceTest {
 
   @Test
   void httpStream_rejectsJsonAndEmptyAudio() {
-    server.enqueue(new MockResponse().setHeader("Content-Type", "application/json").setBody("{}"));
+    server.enqueue(
+        new MockResponse()
+            .setHeader("Content-Type", "application/json")
+            .setBody("{\"detail\":\"bad codec\"}"));
     ttsService
         .synthesizeHttpStream("Hello", "en-IN")
         .test()
         .awaitDone(3, TimeUnit.SECONDS)
-        .assertError(IOException.class)
+        .assertError(
+            error -> error instanceof IOException && error.getMessage().contains("bad codec"))
+        .assertNoValues();
+    server.enqueue(
+        new MockResponse().setResponseCode(422).setBody("{\"detail\":\"invalid speaker\"}"));
+    ttsService
+        .synthesizeHttpStream("Hello", "en-IN")
+        .test()
+        .awaitDone(3, TimeUnit.SECONDS)
+        .assertError(
+            error -> error instanceof IOException && error.getMessage().contains("invalid speaker"))
         .assertNoValues();
     server.enqueue(new MockResponse().setBody(""));
     ttsService
@@ -169,6 +182,32 @@ class SarvamTtsServiceTest {
         .awaitDone(3, TimeUnit.SECONDS)
         .assertError(IOException.class)
         .assertNoValues();
+  }
+
+  @Test
+  void httpStream_blockingAdapterRunsOnCallerThreadAndHonorsCancellation() throws Exception {
+    server.enqueue(
+        new MockResponse()
+            .setBody(new okio.Buffer().write(new byte[16384]))
+            .throttleBody(8192, 2, TimeUnit.SECONDS));
+    OkHttpClient client = new OkHttpClient();
+    SarvamAiConfig config =
+        SarvamAiConfig.builder().apiKey("key").ttsEndpoint(server.url("/tts").toString()).build();
+    Thread callerThread = Thread.currentThread();
+    var cancelled = new java.util.concurrent.atomic.AtomicBoolean(false);
+    var chunks = new java.util.concurrent.atomic.AtomicInteger();
+    new SarvamTtsService(config, client)
+        .synthesizeHttpStream(
+            "Hello",
+            "en-IN",
+            chunk -> {
+              assertThat(Thread.currentThread()).isSameInstanceAs(callerThread);
+              chunks.incrementAndGet();
+              cancelled.set(true);
+            },
+            cancelled::get);
+    assertThat(chunks.get()).isEqualTo(1);
+    awaitNoRunningCalls(client);
   }
 
   @Test
